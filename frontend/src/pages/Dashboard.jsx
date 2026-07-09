@@ -267,11 +267,15 @@ function SearchView({ folders }) {
   return (
     <div>
       <Header title="Search" subtitle="Find any memory in milliseconds." />
-      <div className="relative max-w-xl mb-8">
-        <SearchIcon className="w-4 h-4 text-[#9ca3af] absolute left-4 top-1/2 -translate-y-1/2" />
-        <input data-testid="search-input" value={q} onChange={(e) => setQ(e.target.value)}
-               onKeyDown={(e) => e.key === "Enter" && run()} placeholder="Search memories, decisions, technologies…"
-               className="w-full h-12 pl-11 pr-4 rounded-[14px] border border-[var(--border)] bg-white text-sm focus-ring" />
+      <div className="relative max-w-xl mb-8 flex gap-2">
+        <div className="relative flex-1">
+          <SearchIcon className="w-4 h-4 text-[#9ca3af] absolute left-4 top-1/2 -translate-y-1/2" />
+          <input data-testid="search-input" value={q} onChange={(e) => setQ(e.target.value)}
+                 onKeyDown={(e) => e.key === "Enter" && run()} placeholder="Search memories, decisions, technologies…"
+                 className="w-full h-12 pl-11 pr-4 rounded-[14px] border border-[var(--border)] bg-white text-sm focus-ring" />
+        </div>
+        <button data-testid="search-submit-btn" onClick={run} disabled={!q.trim()}
+                className="btn-primary focus-ring px-5 text-sm font-medium disabled:opacity-40">Search</button>
       </div>
       {searched && results.length === 0 && <Empty label="No matches found." />}
       <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -446,7 +450,7 @@ function SavePanel({ folders, onClose, onSaved }) {
           )}
         </div>
 
-        <div className="p-6 border-t border-[var(--border)] flex items-center justify-between">
+        <div className="p-6 pb-8 border-t border-[var(--border)] flex items-center justify-between shrink-0">
           {saving && !result ? <ProgressStages done={done} /> : <span />}
           {!result ? (
             <button data-testid="save-memory-btn" onClick={save} disabled={saving || !text.trim()}
