@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Dict, Any, List, Tuple
 
-from .bmf import DECISION_ACTIVE
+from .bmf import DECISION_ACTIVE, _dedup_extend
 
 _WORD = re.compile(r"[a-z0-9]+")
 
@@ -49,9 +49,9 @@ def build_context(bmf: Dict[str, Any], current_prompt: str = "") -> Dict[str, An
     active_decisions = [d for d in bmf["decisions"] if d["status"].lower() in DECISION_ACTIVE]
     decision_titles = [d["title"] for d in active_decisions]
     constraints = [c["text"] for c in bmf["constraints"]]
-    tech = (arch["frameworks"] + arch["libraries"] + arch["dependencies"] + arch["integrations"])
-    prefs = (bmf["preferences"]["design"] + bmf["preferences"]["coding_style"]
-             + bmf["preferences"]["framework"])
+    tech = _dedup_extend([], arch["frameworks"] + arch["libraries"] + arch["dependencies"] + arch["integrations"])
+    prefs = _dedup_extend([], bmf["preferences"]["design"] + bmf["preferences"]["coding_style"]
+                          + bmf["preferences"]["framework"])
     pending = bmf["tasks"]["pending"] + bmf["tasks"]["blocked"] + bmf["tasks"]["future"]
 
     # Relevance selection (always-include core: project + state + next step)
