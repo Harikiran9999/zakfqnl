@@ -1,0 +1,37 @@
+{
+  "name": "bounce-extension",
+  "displayName": "Bounce — AI Memory Layer",
+  "version": "0.1.0",
+  "description": "Save memory, not messages. Bounce is iCloud for your AI conversations.",
+  "scripts": {
+    "dev": "plasmo dev",
+    "build": "plasmo build",
+    "package": "plasmo package"
+  },
+  "dependencies": {
+    "framer-motion": "11.18.0",
+    "lucide-react": "0.516.0",
+    "plasmo": "0.90.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.258",
+    "@types/react": "18.2.0",
+    "@types/react-dom": "18.2.0",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.4.35",
+    "tailwindcss": "3.4.17",
+    "typescript": "5.4.5"
+  },
+  "manifest": {
+    "host_permissions": [
+      "https://*/*"
+    ],
+    "permissions": [
+      "storage",
+      "activeTab",
+      "scripting"
+    ]
+  }
+}

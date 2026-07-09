@@ -1,0 +1,12 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: -0.011em; }
+
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79,70,229,0.18); }
+  50% { box-shadow: 0 0 18px 3px rgba(79,70,229,0.18); }
+}
+.memory-glow { animation: breathe 3s ease-in-out infinite; }
