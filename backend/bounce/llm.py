@@ -12,18 +12,35 @@ _client = AsyncOpenAI(
     },
 )
 
-MODEL_EXTRACT = os.environ.get("LLM_MODEL_EXTRACT", "anthropic/claude-3.5-haiku")
-MODEL_REASON = os.environ.get("LLM_MODEL_REASON", "anthropic/claude-3.5-sonnet")
+MODEL_EXTRACT = os.environ.get("LLM_MODEL_EXTRACT", "anthropic/claude-haiku-4.5")
+MODEL_REASON = os.environ.get("LLM_MODEL_REASON", "anthropic/claude-sonnet-4.5")
 
-EXTRACT_SYSTEM = (
-    "You are Bounce's memory extraction engine. You read an AI chat conversation and "
-    "distill it into a compact, structured memory. You MUST output ONLY valid JSON with "
-    "no markdown fences and no commentary. Use this exact schema, filling every field "
-    "(use empty string or empty array when unknown):\n"
-    '{"goal":"","project":"","decisions":[],"constraints":[],"todos":[],"files":[],'
-    '"technologies":[],"architecture":"","preferences":[],"summary":""}\n'
-    "Keep each list item to a short phrase. summary is 2-3 sentences."
-)
+EXTRACT_SYSTEM = """You are Bounce's Conversation Understanding engine.
+You read an AI-assistant conversation and distill the PROJECT UNDERSTANDING behind it —
+not a summary of messages. Capture durable project state: identity, decisions,
+architecture, constraints, preferences, knowledge, tasks, intent and the next step.
+
+Output ONLY valid JSON (no markdown fences, no commentary) with EXACTLY this schema.
+Use "" for unknown scalars and [] for unknown lists. Keep list items to short phrases.
+
+{
+ "project": {"name":"","goal":"","vision":"","problem_statement":"","success_criteria":[]},
+ "current_state": {"current_progress":"","current_focus":"","current_milestone":"","completion_status":""},
+ "decisions": [{"title":"","description":"","reasoning":"","status":"Current","replaces":""}],
+ "architecture": {"system_architecture":"","folder_structure":"","data_flow":"","components":[],"services":[],"integrations":[],"dependencies":[],"apis":[],"libraries":[],"frameworks":[],"environment":[]},
+ "constraints": [{"text":"","status":"active"}],
+ "preferences": {"coding_style":[],"design":[],"animation":[],"writing":[],"naming":[],"framework":[],"goals":[]},
+ "knowledge": [],
+ "tasks": {"completed":[],"pending":[],"blocked":[],"future":[]},
+ "conversation_intent": "",
+ "next_recommendation": ""
+}
+
+Rules:
+- decisions.status is one of: Current, Rejected, Replaced, Deprecated, Pending.
+- If the conversation changes an earlier choice, set the new decision status "Current" and put the old choice's title in "replaces".
+- conversation_intent: WHY this conversation happened, in one sentence.
+- next_recommendation: the single most logical next step for the user."""
 
 OPTIMIZE_SYSTEM = (
     "You are Bounce's prompt optimizer. Rewrite the user's prompt so it is clearer, "
@@ -31,33 +48,9 @@ OPTIMIZE_SYSTEM = (
     "Return ONLY the rewritten prompt text with no preamble, no quotes, no markdown."
 )
 
-_SCHEMA_KEYS = [
-    "goal", "project", "decisions", "constraints", "todos",
-    "files", "technologies", "architecture", "preferences", "summary",
-]
-_LIST_KEYS = {"decisions", "constraints", "todos", "files", "technologies", "preferences"}
-
-
-def _empty_structured() -> dict:
-    return {k: ([] if k in _LIST_KEYS else "") for k in _SCHEMA_KEYS}
-
-
-def _coerce(data: dict) -> dict:
-    out = _empty_structured()
-    for k in _SCHEMA_KEYS:
-        v = data.get(k)
-        if k in _LIST_KEYS:
-            if isinstance(v, list):
-                out[k] = [str(x).strip() for x in v if str(x).strip()]
-            elif isinstance(v, str) and v.strip():
-                out[k] = [v.strip()]
-        else:
-            out[k] = str(v).strip() if v is not None else ""
-    return out
-
 
 def _parse_json(text: str) -> dict:
-    text = text.strip()
+    text = (text or "").strip()
     text = re.sub(r"^```(?:json)?", "", text).strip()
     text = re.sub(r"```$", "", text).strip()
     try:
@@ -72,25 +65,36 @@ def _parse_json(text: str) -> dict:
     return {}
 
 
-async def extract_memory(conversation: str) -> dict:
-    conversation = conversation[:24000]
+def _fallback_partial(conversation: str) -> dict:
+    return {
+        "project": {"name": "", "goal": "Captured conversation", "vision": "",
+                    "problem_statement": "", "success_criteria": []},
+        "current_state": {"current_progress": conversation[:280], "current_focus": "",
+                          "current_milestone": "", "completion_status": ""},
+        "decisions": [], "architecture": {},
+        "constraints": [], "preferences": {},
+        "knowledge": [], "tasks": {"completed": [], "pending": [], "blocked": [], "future": []},
+        "conversation_intent": "", "next_recommendation": "",
+    }
+
+
+async def extract_bmf(conversation: str, current_prompt: str = "") -> dict:
+    convo = conversation[:9000]
+    user = convo if not current_prompt else f"CURRENT DRAFT PROMPT:\n{current_prompt[:1200]}\n\nCONVERSATION:\n{convo}"
     try:
         resp = await _client.chat.completions.create(
             model=MODEL_EXTRACT,
             temperature=0.2,
-            max_tokens=1500,
+            max_tokens=3200,
             messages=[
                 {"role": "system", "content": EXTRACT_SYSTEM},
-                {"role": "user", "content": conversation},
+                {"role": "user", "content": user},
             ],
         )
-        content = resp.choices[0].message.content or ""
-        return _coerce(_parse_json(content))
-    except Exception as e:
-        s = _empty_structured()
-        s["summary"] = conversation[:280]
-        s["goal"] = "Captured conversation"
-        return s
+        data = _parse_json(resp.choices[0].message.content or "")
+        return data if isinstance(data, dict) and data else _fallback_partial(convo)
+    except Exception:
+        return _fallback_partial(convo)
 
 
 async def optimize_prompt(prompt: str) -> str:

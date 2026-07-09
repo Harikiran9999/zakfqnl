@@ -12,7 +12,7 @@ from starlette.middleware.cors import CORSMiddleware
 import httpx
 import secrets
 
-from bounce import db, llm, memory as mem
+from bounce import db, llm, memory as mem, bmf as bmf_mod, deploy as deploy_mod
 from bounce.models import (
     User, Folder, Memory, Deployment,
     SaveRequest, DeployRequest, SearchRequest, MergeRequest, OptimizeRequest,
@@ -142,20 +142,43 @@ async def _get_or_create_folder(uid, folder_id, folder_name):
 async def save_memory(payload: SaveRequest, current=Depends(auth.get_current_user)):
     uid = current["user_id"]
     folder = await _get_or_create_folder(uid, payload.folder_id, payload.folder_name)
-    structured = await llm.extract_memory(payload.conversation)
-    bmf = mem.build_bmf(structured)
+
+    # 1. Conversation Understanding -> partial BMF
+    partial = await llm.extract_bmf(payload.conversation)
+
+    # 2. Evolve the workspace's Project Memory (never overwrite; move changes to history)
+    doc = await db.workspace_memories.find_one(
+        {"user_id": uid, "folder_id": folder["folder_id"]}, {"_id": 0})
+    current_bmf = doc["bmf"] if doc else bmf_mod.empty_bmf(folder["folder_id"], folder["name"])
+    evolved = bmf_mod.evolve(current_bmf, partial,
+                             source_ai=payload.source_platform or "", source_model="")
+    package = bmf_mod.build_package(evolved)
+    await db.workspace_memories.update_one(
+        {"user_id": uid, "folder_id": folder["folder_id"]},
+        {"$set": {"user_id": uid, "folder_id": folder["folder_id"], "bmf": evolved,
+                  "package": package, "updated_at": bmf_mod._now()},
+         "$setOnInsert": {"created_at": bmf_mod._now()}},
+        upsert=True,
+    )
+
+    # 3. Save-event log (compact snapshot) powers Recent + Search + dashboard cards
+    compact = bmf_mod.to_compact(evolved)
     m = Memory(
-        user_id=uid,
-        folder_id=folder["folder_id"],
-        title=payload.title or mem.make_title(structured),
-        structured=structured,
-        bmf=bmf,
-        searchable_text=mem.searchable_text(structured),
-        source_platform=payload.source_platform or "",
-        source_url=payload.source_url or "",
+        user_id=uid, folder_id=folder["folder_id"],
+        title=payload.title or mem.make_title(compact),
+        structured=compact, bmf=package,
+        searchable_text=mem.searchable_text(compact),
+        source_platform=payload.source_platform or "", source_url=payload.source_url or "",
     )
     await db.memories.insert_one(m.model_dump())
-    return {"memory": _clean_memory(m.model_dump()), "folder": {"folder_id": folder["folder_id"], "name": folder["name"]}}
+
+    return {
+        "memory": _clean_memory(m.model_dump()),
+        "folder": {"folder_id": folder["folder_id"], "name": folder["name"]},
+        "memory_version": evolved["metadata"]["memory_version"],
+        "next_recommendation": evolved.get("next_recommendation", ""),
+        "conversation_intent": evolved.get("conversation_intent", ""),
+    }
 
 
 @api.post("/memory/deploy")
@@ -164,16 +187,47 @@ async def deploy_memory(payload: DeployRequest, current=Depends(auth.get_current
     folder = await db.folders.find_one({"user_id": uid, "folder_id": payload.folder_id}, {"_id": 0})
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
-    docs = await db.memories.find({"user_id": uid, "folder_id": payload.folder_id}, {"_id": 0}).to_list(1000)
-    if not docs:
-        raise HTTPException(status_code=400, detail="No memories in this folder yet")
-    docs.sort(key=lambda x: x["created_at"], reverse=True)
-    merged = mem.merge_structured([d["structured"] for d in docs])
-    context = mem.build_context(folder["name"], merged)
-    dep = Deployment(user_id=uid, folder_id=payload.folder_id, context=context,
-                     memory_ids=[d["memory_id"] for d in docs])
+    doc = await db.workspace_memories.find_one(
+        {"user_id": uid, "folder_id": payload.folder_id}, {"_id": 0})
+    if not doc or doc["bmf"]["metadata"]["memory_version"] == 0:
+        raise HTTPException(status_code=400, detail="No memory in this workspace yet")
+
+    built = deploy_mod.build_context(doc["bmf"], payload.current_prompt or "")
+    dep = Deployment(user_id=uid, folder_id=payload.folder_id, context=built["context"], memory_ids=[])
     await db.deployments.insert_one(dep.model_dump())
-    return {"context": context, "deployment_id": dep.deployment_id, "memory_count": len(docs)}
+    return {
+        "context": built["context"],
+        "deployment_id": dep.deployment_id,
+        "relevance": built["relevance"],
+        "memory_version": doc["bmf"]["metadata"]["memory_version"],
+    }
+
+
+@api.get("/workspace/{folder_id}/memory")
+async def workspace_memory(folder_id: str, current=Depends(auth.get_current_user)):
+    doc = await db.workspace_memories.find_one(
+        {"user_id": current["user_id"], "folder_id": folder_id}, {"_id": 0})
+    if not doc:
+        folder = await db.folders.find_one(
+            {"user_id": current["user_id"], "folder_id": folder_id}, {"_id": 0})
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
+        return {"bmf": bmf_mod.empty_bmf(folder_id, folder["name"])}
+    return {"bmf": doc["bmf"]}
+
+
+@api.get("/workspace/{folder_id}/export")
+async def workspace_export(folder_id: str, current=Depends(auth.get_current_user)):
+    doc = await db.workspace_memories.find_one(
+        {"user_id": current["user_id"], "folder_id": folder_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="No memory to export")
+    name = doc["bmf"]["metadata"]["workspace_name"] or "workspace"
+    return {
+        "filename": f"{name.lower().replace(' ', '_')}.bmf",
+        "bmf_version": bmf_mod.BMF_VERSION,
+        "package": doc["package"],
+    }
 
 
 @api.post("/memory/search")

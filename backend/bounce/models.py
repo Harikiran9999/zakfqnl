@@ -72,6 +72,7 @@ class SaveRequest(BaseModel):
 
 class DeployRequest(BaseModel):
     folder_id: str
+    current_prompt: Optional[str] = ""
 
 
 class SearchRequest(BaseModel):

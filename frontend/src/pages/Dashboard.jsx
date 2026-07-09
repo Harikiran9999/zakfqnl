@@ -46,7 +46,7 @@ export default function Dashboard() {
   const runDeploy = async (folder_id, name) => {
     try {
       const res = await api.post("/memory/deploy", { folder_id });
-      setDeployCtx({ context: res.data.context, name, count: res.data.memory_count });
+      setDeployCtx({ context: res.data.context, name, version: res.data.memory_version });
       await navigator.clipboard.writeText(res.data.context).catch(() => {});
       load();
     } catch (e) {
@@ -490,7 +490,7 @@ function DeployModal({ data, onClose }) {
               <Rocket className="w-5 h-5 text-[var(--accent)]" />
               <div>
                 <h2 className="text-lg font-semibold tracking-tight">Memory deployed</h2>
-                <p className="text-sm text-[#6b7280]">{data.name} · {data.count} memories · copied to clipboard</p>
+                <p className="text-sm text-[#6b7280]">{data.name} · memory v{data.version} · relevant context copied</p>
               </div>
             </div>
             <button data-testid="deploy-close-btn" onClick={onClose} className="p-2 rounded-lg hover:bg-[#F3F4F6]"><X className="w-5 h-5" /></button>

@@ -1,100 +1,70 @@
-import { useEffect, useState } from "react"
-import { motion, AnimatePresence } from "framer-motion"
-import { Rocket, Sparkles, Save, FolderPlus, Check, Loader2, Puzzle } from "lucide-react"
-import { api, getToken, setToken, clearToken } from "~lib/api"
+import { useState } from "react"
+import { motion } from "framer-motion"
+import { Sparkles, Save, FolderPlus, Loader2, LogOut } from "lucide-react"
 import "~style.css"
 
-type Folder = { folder_id: string; name: string; memory_count: number }
+import { AppProvider, useApp } from "~lib/providers/AppProvider"
+import { useSaveFlow } from "~lib/hooks/useSaveFlow"
+import { memoryService } from "~lib/services/memory"
+import { getPrompt, insert } from "~lib/services/messaging"
+import { fadeRise, listStagger, spring } from "~lib/animations"
+import { Button } from "~lib/components/Button"
+import { ProgressStages } from "~lib/components/ProgressStages"
+import { ConnectScreen } from "~lib/components/ConnectScreen"
+import { WorkspaceRow } from "~lib/components/WorkspaceRow"
+import { Toast } from "~lib/components/Toast"
+import type { Workspace } from "~lib/types"
 
-const spring = { type: "spring", stiffness: 220, damping: 22 } as const
+function Shell() {
+  const { ready, connected, user, workspaces, connect, disconnect, refresh } = useApp()
+  const [target, setTarget] = useState("")
+  const [toast, setToast] = useState<string | null>(null)
+  const save = useSaveFlow(refresh)
 
-function useActiveTab() {
-  const send = (message: any): Promise<any> =>
-    new Promise((resolve) => {
-      chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-        if (!tab?.id) return resolve(null)
-        chrome.tabs.sendMessage(tab.id, message, (res) => resolve(res))
-      })
-    })
-  return { send }
-}
-
-export default function Popup() {
-  const [ready, setReady] = useState(false)
-  const [connected, setConnected] = useState(false)
-  const [code, setCode] = useState("")
-  const [folders, setFolders] = useState<Folder[]>([])
-  const [stage, setStage] = useState<string | null>(null)
-  const { send } = useActiveTab()
-
-  const refresh = async () => {
-    try {
-      await api.me()
-      setConnected(true)
-      const f = await api.folders()
-      setFolders(f)
-    } catch {
-      setConnected(false)
-    } finally {
-      setReady(true)
-    }
+  const flash = (m: string, ms = 1500) => {
+    setToast(m)
+    setTimeout(() => setToast((t) => (t === m ? null : t)), ms)
   }
 
-  useEffect(() => { refresh() }, [])
+  const targetId = target || workspaces[0]?.folder_id
 
-  const connect = async () => {
-    if (!code.trim()) return
-    await setToken(code.trim())
-    setCode("")
-    await refresh()
+  const onSave = async () => {
+    save.reset()
+    await save.run({ folderId: targetId })
+    setTimeout(save.reset, 2600)
   }
 
-  const flash = (msg: string, ms = 1400) => {
-    setStage(msg)
-    setTimeout(() => setStage(null), ms)
+  const onSaveNew = async () => {
+    const name = window.prompt("New workspace name")
+    if (!name) return
+    save.reset()
+    await save.run({ folderName: name })
+    setTimeout(save.reset, 2600)
   }
 
-  const runSave = async (asNew = false) => {
-    const cap = await send({ type: "CAPTURE" })
-    if (!cap?.text) return flash("No conversation found")
-    setStage("Understanding…")
-    try {
-      const body: any = { conversation: cap.text, source_platform: cap.platform, source_url: cap.url }
-      if (asNew) {
-        const name = window.prompt("New folder name")
-        if (!name) return setStage(null)
-        body.folder_name = name
-      } else {
-        body.folder_id = folders[0]?.folder_id
-      }
-      setStage("Organizing…")
-      await api.save(body)
-      setStage("Memory Ready")
-      await refresh()
-      setTimeout(() => setStage(null), 1200)
-    } catch (e: any) {
-      flash(e.message || "Save failed")
-    }
-  }
-
-  const runOptimize = async () => {
-    const cur = await send({ type: "GET_INPUT" })
+  const onOptimize = async () => {
+    const cur = await getPrompt()
     if (!cur?.text) return flash("Nothing to optimize")
-    setStage("Optimizing…")
+    flash("Optimizing…", 4000)
     try {
-      const res = await api.optimize(cur.text)
-      await send({ type: "INSERT", text: res.optimized })
+      const optimized = await memoryService.optimize(cur.text)
+      await insert(optimized)
       flash("Prompt optimized")
-    } catch (e: any) { flash(e.message || "Failed") }
+    } catch (e: any) {
+      flash(e?.message || "Optimize failed")
+    }
   }
 
-  const runDeploy = async (folder_id: string) => {
-    setStage("Deploying…")
+  const onDeploy = async (ws: Workspace) => {
+    flash("Finding relevant memory…", 5000)
     try {
-      const res = await api.deploy(folder_id)
-      await send({ type: "INSERT", text: res.context })
+      const cur = await getPrompt()
+      const res = await memoryService.deploy(ws.folder_id, cur?.text || "")
+      await insert(res.context)
       flash("Deployed")
-    } catch (e: any) { flash(e.message || "Nothing to deploy") }
+    } catch (e: any) {
+      flash(e?.message || "Nothing to deploy")
+    }
   }
 
   return (
@@ -105,8 +75,8 @@ export default function Popup() {
         </div>
         <span className="font-semibold tracking-tight">Bounce</span>
         {connected && (
-          <span className="ml-auto text-[11px] text-[#10B981] flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" /> Connected
+          <span className="ml-auto text-[11px] text-success flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-success" /> Connected
           </span>
         )}
       </div>
@@ -116,77 +86,90 @@ export default function Popup() {
           <Loader2 className="w-5 h-5 animate-spin text-accent" />
         </div>
       ) : !connected ? (
-        <div className="space-y-3">
-          <div className="w-9 h-9 rounded-[12px] bg-[rgba(79,70,229,0.14)] flex items-center justify-center">
-            <Puzzle className="w-4 h-4 text-accent" />
-          </div>
-          <p className="text-sm font-medium">Connect your account</p>
-          <p className="text-xs text-[#6b7280] leading-relaxed">
-            Open the Bounce dashboard, copy your connection code, and paste it below.
-          </p>
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="Paste connection code"
-            className="w-full h-10 px-3 rounded-[12px] border border-black/10 text-xs outline-none focus:ring-2 focus:ring-[rgba(79,70,229,0.3)]"
-          />
-          <button onClick={connect}
-            className="w-full h-10 rounded-full bg-ink text-white text-sm font-medium transition-transform hover:scale-[1.02]">
-            Connect
-          </button>
-        </div>
+        <ConnectScreen onConnect={connect} />
       ) : (
-        <>
+        <motion.div variants={fadeRise} initial="hidden" animate="show">
+          <div className="mb-3">
+            <label className="text-[11px] font-medium text-[#9ca3af]">Save to workspace</label>
+            <select
+              data-testid="workspace-select"
+              value={targetId}
+              onChange={(e) => setTarget(e.target.value)}
+              className="mt-1 w-full h-9 px-2 rounded-[10px] border border-black/10 bg-white text-sm outline-none focus:ring-2 focus:ring-[rgba(79,70,229,0.3)]">
+              {workspaces.map((w) => (
+                <option key={w.folder_id} value={w.folder_id}>
+                  {w.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="grid grid-cols-3 gap-2 mb-4">
-            <Action icon={Sparkles} label="Optimize" onClick={runOptimize} />
-            <Action icon={Save} label="Save" onClick={() => runSave(false)} />
-            <Action icon={FolderPlus} label="New folder" onClick={() => runSave(true)} />
+            <ActionTile icon={Sparkles} label="Optimize" onClick={onOptimize} testId="optimize-btn" />
+            <ActionTile icon={Save} label="Save" onClick={onSave} testId="save-btn" />
+            <ActionTile icon={FolderPlus} label="New" onClick={onSaveNew} testId="save-new-btn" />
           </div>
 
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-2">Recent</p>
-          <div className="space-y-1.5 max-h-[220px] overflow-y-auto">
-            {folders.slice(0, 8).map((f) => (
-              <motion.div key={f.folder_id} whileHover={{ scale: 1.01 }} transition={spring}
-                className="flex items-center justify-between px-3 py-2.5 rounded-[12px] bg-white border border-black/[0.06] group">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{f.name}</p>
-                  <p className="text-[11px] text-[#9ca3af]">{f.memory_count} memories</p>
-                </div>
-                <button onClick={() => runDeploy(f.folder_id)}
-                  className="p-2 rounded-lg text-accent hover:bg-[rgba(79,70,229,0.12)] transition-colors" title="Deploy">
-                  <Rocket className="w-4 h-4" />
-                </button>
-              </motion.div>
+          {save.stage !== "idle" && (
+            <div className="mb-4 p-3 rounded-[14px] bg-white border border-black/[0.06]" data-testid="save-status">
+              <ProgressStages stage={save.stage} />
+              {save.stage === "ready" && save.result && (
+                <motion.div variants={fadeRise} initial="hidden" animate="show" className="mt-2">
+                  <p className="text-sm font-medium tracking-tight">{save.result.memory.title}</p>
+                  <p className="text-[11px] text-[#6b7280]">
+                    Workspace v{save.result.memory_version} · {save.result.folder.name}
+                  </p>
+                  {save.result.next_recommendation && (
+                    <p className="text-xs text-[#374151] mt-1.5 leading-relaxed">
+                      <span className="text-accent font-medium">Next:</span> {save.result.next_recommendation}
+                    </p>
+                  )}
+                </motion.div>
+              )}
+              {save.error && <p className="text-xs text-red-500 mt-1">{save.error}</p>}
+            </div>
+          )}
+
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-2">Workspaces</p>
+          <motion.div variants={listStagger} initial="hidden" animate="show" className="space-y-1.5 max-h-[220px] overflow-y-auto">
+            {workspaces.slice(0, 8).map((w) => (
+              <WorkspaceRow key={w.folder_id} ws={w} onDeploy={onDeploy} />
             ))}
-          </div>
+          </motion.div>
 
-          <button onClick={async () => { await clearToken(); setConnected(false) }}
-            className="mt-4 text-[11px] text-[#9ca3af] hover:text-ink transition-colors">Disconnect</button>
-        </>
+          <button
+            onClick={disconnect}
+            data-testid="disconnect-btn"
+            className="mt-4 text-[11px] text-[#9ca3af] hover:text-ink transition-colors flex items-center gap-1.5">
+            <LogOut className="w-3 h-3" /> Disconnect {user?.email ? `· ${user.email}` : ""}
+          </button>
+        </motion.div>
       )}
 
-      <AnimatePresence>
-        {stage && (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
-            transition={spring}
-            className="fixed bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-ink text-white text-xs font-medium flex items-center gap-2">
-            {stage === "Memory Ready" || stage === "Deployed" || stage === "Prompt optimized"
-              ? <Check className="w-3.5 h-3.5 text-[#10B981]" strokeWidth={3} />
-              : <span className="w-1.5 h-1.5 rounded-full bg-accent memory-glow" />}
-            {stage}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Toast message={toast} />
     </div>
   )
 }
 
-function Action({ icon: Icon, label, onClick }: { icon: any; label: string; onClick: () => void }) {
+function ActionTile({ icon: Icon, label, onClick, testId }: any) {
   return (
-    <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.98 }} transition={spring} onClick={onClick}
+    <motion.button
+      whileHover={{ scale: 1.03 }}
+      whileTap={{ scale: 0.98 }}
+      transition={spring}
+      onClick={onClick}
+      data-testid={testId}
       className="flex flex-col items-center gap-1.5 py-3 rounded-[14px] bg-white border border-black/[0.06]">
       <Icon className="w-4 h-4 text-accent" />
       <span className="text-[11px] font-medium">{label}</span>
     </motion.button>
+  )
+}
+
+export default function Popup() {
+  return (
+    <AppProvider>
+      <Shell />
+    </AppProvider>
   )
 }

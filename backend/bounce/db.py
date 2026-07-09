@@ -9,6 +9,7 @@ sessions = db.user_sessions
 folders = db.folders
 memories = db.memories
 deployments = db.deployments
+workspace_memories = db.workspace_memories
 
 DEFAULT_FOLDERS = ["Startup", "Marketing", "Research", "Coding", "Personal"]
 
